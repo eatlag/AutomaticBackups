@@ -10,7 +10,13 @@
             <StackPanel Margin="18,24">
                 <StackPanel Orientation="Horizontal" Margin="4,0,0,28"><Border Width="38" Height="38" CornerRadius="11" Background="{DynamicResource AccentGradient}"><TextBlock Text="AB" Foreground="#27D9F3" FontSize="14" FontWeight="Black" HorizontalAlignment="Center" VerticalAlignment="Center"/></Border><TextBlock Text="Preferences" Foreground="White" FontSize="16" FontWeight="Bold" VerticalAlignment="Center" Margin="10,0,0,0"/></StackPanel>
                 <Border Background="#35436D" CornerRadius="8" Padding="11,10"><TextBlock Text="⚙   General" Foreground="White" FontWeight="SemiBold" FontSize="12"/></Border>
-                <TextBlock Text="Private by design" Foreground="#D2E4F2" FontSize="10" Margin="4,360,0,0"/><TextBlock Text="Made by EatLag" Foreground="#63D9F1" FontSize="10" FontWeight="SemiBold" Margin="4,4,0,0"/>
+                <TextBlock Text="Private by design" Foreground="#D2E4F2" FontSize="10" Margin="4,360,0,0"/>
+                <StackPanel Orientation="Horizontal" Margin="4,5,0,0" VerticalAlignment="Center">
+                    <TextBlock Text="Made by EatLag" Foreground="#63D9F1" FontSize="10" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                    <Button Content="Website ↗" Click="Website_Click" Padding="8,4" FontSize="10" Margin="9,0,0,0"
+                            Foreground="#77E6F3" Background="#302653" BorderBrush="#6551A8" BorderThickness="1"
+                            ToolTip="Open eatlag.net"/>
+                </StackPanel>
             </StackPanel>
         </Border>
         <Grid Grid.Column="1" Margin="28,26,28,24">

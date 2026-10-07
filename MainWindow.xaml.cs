@@ -3,6 +3,7 @@ using System.ComponentModel;
 using System.IO;
 using System.IO.Compression;
 using System.IO.Enumeration;
+using System.Diagnostics;
 using System.Text.Json;
 using System.Windows;
 using System.Windows.Controls;
@@ -120,6 +121,18 @@ public partial class MainWindow : Window
     {
         var settings = new SettingsWindow { Owner = this };
         settings.ShowDialog();
+    }
+
+    private void Website_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            Process.Start(new ProcessStartInfo("https://eatlag.net") { UseShellExecute = true });
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, $"The website couldn't be opened.\n\n{ex.Message}", "Automatic Backups", MessageBoxButton.OK, MessageBoxImage.Information);
+        }
     }
 
     private void AddProfile_Click(object sender, RoutedEventArgs e)

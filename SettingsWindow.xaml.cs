@@ -1,5 +1,6 @@
 using Microsoft.Win32;
 using System.Windows;
+using System.Diagnostics;
 
 namespace AutomaticBackups;
 
@@ -48,6 +49,18 @@ public partial class SettingsWindow : Window
             RunOnLogonCheckBox.IsChecked = StartupRegistration.IsEnabled();
             _initializing = false;
             MessageBox.Show(this, $"Windows couldn't update the sign-in startup setting.\n\n{ex.Message}", "Settings", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+    }
+
+    private void Website_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            Process.Start(new ProcessStartInfo("https://eatlag.net") { UseShellExecute = true });
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, $"The website couldn't be opened.\n\n{ex.Message}", "Automatic Backups", MessageBoxButton.OK, MessageBoxImage.Information);
         }
     }
 }
