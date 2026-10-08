@@ -4,6 +4,7 @@ using System.IO;
 using System.IO.Compression;
 using System.IO.Enumeration;
 using System.Diagnostics;
+using System.Globalization;
 using System.Text.Json;
 using System.Windows;
 using System.Windows.Controls;
@@ -11,6 +12,10 @@ using System.Windows.Media;
 using System.Windows.Threading;
 using Microsoft.Win32;
 using IOPath = System.IO.Path;
+using Forms = System.Windows.Forms;
+using Drawing = System.Drawing;
+using Brushes = System.Windows.Media.Brushes;
+using MessageBox = System.Windows.MessageBox;
 
 namespace AutomaticBackups;
 
@@ -20,14 +25,21 @@ public partial class MainWindow : Window
     private static readonly string ProfilesPath = IOPath.Combine(AppFolder, "profiles.json");
     private static readonly string LogPath = IOPath.Combine(AppFolder, "backup.log");
     private readonly ObservableCollection<BackupProfile> _profiles = [];
+    private readonly ObservableCollection<RecentBackupActivity> _recentActivity = [];
     private readonly DispatcherTimer _timer = new() { Interval = TimeSpan.FromSeconds(1) };
     private DateTime _lastScheduleCheck = DateTime.MinValue;
+    private DateTime _lastCapacityRefresh = DateTime.MinValue;
+    private double _capacityRatio;
     private bool _busy;
+    private bool _allowClose;
+    private Forms.NotifyIcon? _trayIcon;
+    private Drawing.Icon? _trayDrawingIcon;
 
     public MainWindow()
     {
         InitializeComponent();
         ProfileList.ItemsSource = _profiles;
+        ActivityList.ItemsSource = _recentActivity;
         LoadProfiles();
         LoadLog();
         RefreshDashboard();
@@ -38,6 +50,11 @@ public partial class MainWindow : Window
             {
                 _lastScheduleCheck = DateTime.Now;
                 await CheckSchedulesAsync();
+            }
+            if (DateTime.Now - _lastCapacityRefresh >= TimeSpan.FromSeconds(30))
+            {
+                _lastCapacityRefresh = DateTime.Now;
+                UpdateDestinationCapacity();
             }
         };
         _timer.Start();
@@ -68,7 +85,11 @@ public partial class MainWindow : Window
 
     private void LoadLog()
     {
-        try { if (File.Exists(LogPath)) ActivityLog.Text = string.Join(Environment.NewLine, File.ReadLines(LogPath).TakeLast(150)) + Environment.NewLine; ActivityLog.ScrollToEnd(); }
+        try
+        {
+            if (File.Exists(LogPath))
+                foreach (var line in File.ReadLines(LogPath).TakeLast(150)) AddActivityFromLog(line);
+        }
         catch { }
     }
 
@@ -82,8 +103,66 @@ public partial class MainWindow : Window
 
     private void LogToView(string line)
     {
-        ActivityLog.AppendText(line + Environment.NewLine);
-        ActivityLog.ScrollToEnd();
+        AddActivityFromLog(line);
+    }
+
+    private void AddActivityFromLog(string line)
+    {
+        if (!TryParseBackupActivity(line, out var activity) || activity is null) return;
+        _recentActivity.Insert(0, activity);
+        while (_recentActivity.Count > 5) _recentActivity.RemoveAt(_recentActivity.Count - 1);
+        ActivityEmptyState.Visibility = _recentActivity.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+        ActivitySubtitle.Text = _recentActivity.Count == 0 ? "Latest backup results" : $"Last {_recentActivity.Count} backup result{(_recentActivity.Count == 1 ? "" : "s")}";
+    }
+
+    private static bool TryParseBackupActivity(string line, out RecentBackupActivity? activity)
+    {
+        activity = null;
+        var closingBracket = line.IndexOf(']');
+        if (line.Length < 3 || line[0] != '[' || closingBracket < 0) return false;
+        if (!DateTime.TryParseExact(line[1..closingBracket], "yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture, DateTimeStyles.None, out var when)) return false;
+
+        var message = line[(closingBracket + 1)..].Trim();
+        if (message.StartsWith("ERROR · ", StringComparison.Ordinal)) message = message[8..];
+        var isFailure = message.StartsWith("Backup failed · ", StringComparison.Ordinal);
+        var isComplete = message.StartsWith("Backup complete · ", StringComparison.Ordinal);
+        if (!isFailure && !isComplete) return false;
+
+        var details = message[(isFailure ? "Backup failed · ".Length : "Backup complete · ".Length)..];
+        var parts = details.Split(" · ", StringSplitOptions.None);
+        var profileName = parts.FirstOrDefault()?.Trim();
+        if (string.IsNullOrWhiteSpace(profileName)) profileName = "Backup";
+
+        string summary;
+        if (isComplete)
+        {
+            var countIndex = Array.FindIndex(parts, 1, parts.Length - 1, part =>
+                part.EndsWith(" files", StringComparison.OrdinalIgnoreCase) || part.EndsWith(" file", StringComparison.OrdinalIgnoreCase));
+            if (countIndex > 0)
+            {
+                profileName = string.Join(" · ", parts.Take(countIndex)).Trim();
+                var size = countIndex + 1 < parts.Length ? parts[countIndex + 1].Trim() : string.Empty;
+                summary = $"Completed · {parts[countIndex].Trim()}" + (size.Length > 0 ? $" · {size}" : string.Empty);
+            }
+            else
+            {
+                summary = "Backup completed";
+            }
+        }
+        else
+        {
+            var separator = details.IndexOf(" · ", StringComparison.Ordinal);
+            if (separator >= 0) profileName = details[..separator].Trim();
+            summary = "Failed · Check the source or destination.";
+        }
+
+        var timeLabel = when.Date == DateTime.Today
+            ? $"Today · {when:h:mm tt}"
+            : when.Date == DateTime.Today.AddDays(-1)
+                ? $"Yesterday · {when:h:mm tt}"
+                : $"{when:MMM d} · {when:h:mm tt}";
+        activity = new RecentBackupActivity(profileName, summary, timeLabel, isFailure);
+        return true;
     }
 
     private void RefreshDashboard()
@@ -111,6 +190,60 @@ public partial class MainWindow : Window
             SelectedSource.Text = selected.Source; SelectedDestination.Text = selected.Destination;
             SelectedOptions.Text = $"{selected.Compression} compression  ·  Keep newest {selected.Retention} ZIPs\nExclusions: {(string.IsNullOrWhiteSpace(selected.Exclude) ? "None" : selected.Exclude)}";
         }
+        UpdateDestinationCapacity();
+    }
+
+    private void UpdateDestinationCapacity()
+    {
+        if (ProfileList.SelectedItem is not BackupProfile profile)
+        {
+            CapacityAmount.Text = "Select a backup";
+            CapacityDetail.Text = "Choose a profile to see available space.";
+            CapacityPercent.Text = "—";
+            CapacityPercent.Foreground = Brushes.LightSkyBlue;
+            _capacityRatio = 0;
+            UpdateCapacityBarWidth();
+            return;
+        }
+
+        try
+        {
+            var destination = PathHelpers.Normalize(profile.Destination);
+            var driveRoot = IOPath.GetPathRoot(destination);
+            if (string.IsNullOrWhiteSpace(driveRoot)) throw new IOException("The destination drive isn't available.");
+            var drive = new DriveInfo(driveRoot);
+            if (!drive.IsReady || drive.TotalSize <= 0) throw new IOException("The destination drive isn't ready.");
+
+            var freeBytes = drive.AvailableFreeSpace;
+            var totalBytes = drive.TotalSize;
+            _capacityRatio = Math.Clamp(freeBytes / (double)totalBytes, 0, 1);
+            var capacityBrush = _capacityRatio >= 0.25 ? Brushes.MediumSeaGreen
+                : _capacityRatio >= 0.10 ? Brushes.DarkOrange
+                : Brushes.IndianRed;
+            CapacityAmount.Text = $"{FormatSize(freeBytes)} free";
+            CapacityDetail.Text = $"of {FormatSize(totalBytes)} total on the destination drive";
+            CapacityPercent.Text = $"{_capacityRatio:P0} available";
+            CapacityPercent.Foreground = capacityBrush;
+            CapacityBar.Background = capacityBrush;
+            UpdateCapacityBarWidth();
+        }
+        catch
+        {
+            CapacityAmount.Text = "Space unavailable";
+            CapacityDetail.Text = "Couldn't read free space for this destination.";
+            CapacityPercent.Text = "—";
+            CapacityPercent.Foreground = Brushes.LightSteelBlue;
+            _capacityRatio = 0;
+            UpdateCapacityBarWidth();
+        }
+    }
+
+    private void CapacityTrack_SizeChanged(object sender, SizeChangedEventArgs e) => UpdateCapacityBarWidth();
+
+    private void UpdateCapacityBarWidth()
+    {
+        if (CapacityTrack is not null && CapacityBar is not null)
+            CapacityBar.Width = CapacityTrack.ActualWidth * _capacityRatio;
     }
 
     private void ProfileList_SelectionChanged(object sender, SelectionChangedEventArgs e) => RefreshDashboard();
@@ -121,6 +254,90 @@ public partial class MainWindow : Window
     {
         var settings = new SettingsWindow { Owner = this };
         settings.ShowDialog();
+    }
+
+    private void Window_Closing(object? sender, CancelEventArgs e)
+    {
+        if (_allowClose)
+        {
+            DisposeTrayIcon();
+            return;
+        }
+
+        var choice = new CloseChoiceWindow { Owner = this };
+        if (choice.ShowDialog() != true)
+        {
+            e.Cancel = true;
+            return;
+        }
+
+        if (choice.Result == CloseChoice.MinimizeToTray)
+        {
+            e.Cancel = true;
+            EnsureTrayIcon();
+            Hide();
+            ShowInTaskbar = false;
+            _trayIcon?.ShowBalloonTip(2500, "Automatic Backups", "The app is still running in the system tray.", Forms.ToolTipIcon.Info);
+            return;
+        }
+
+        _allowClose = true;
+        DisposeTrayIcon();
+    }
+
+    private void EnsureTrayIcon()
+    {
+        if (_trayIcon is not null) return;
+
+        var menu = new Forms.ContextMenuStrip();
+        menu.Items.Add("Open Automatic Backups", null, (_, _) => RestoreFromTray());
+        menu.Items.Add(new Forms.ToolStripSeparator());
+        menu.Items.Add("Quit completely", null, (_, _) => QuitFromTray());
+
+        _trayDrawingIcon = Drawing.Icon.ExtractAssociatedIcon(Environment.ProcessPath ?? string.Empty)
+            ?? (Drawing.Icon)Drawing.SystemIcons.Application.Clone();
+        _trayIcon = new Forms.NotifyIcon
+        {
+            Text = "Automatic Backups",
+            Icon = _trayDrawingIcon,
+            ContextMenuStrip = menu,
+            Visible = true
+        };
+        _trayIcon.DoubleClick += (_, _) => RestoreFromTray();
+    }
+
+    public void StartMinimizedToTray()
+    {
+        EnsureTrayIcon();
+        ShowInTaskbar = false;
+        Hide();
+    }
+
+    private void RestoreFromTray()
+    {
+        ShowInTaskbar = true;
+        Show();
+        if (WindowState == WindowState.Minimized) WindowState = WindowState.Normal;
+        Activate();
+    }
+
+    private void QuitFromTray()
+    {
+        _allowClose = true;
+        DisposeTrayIcon();
+        Close();
+    }
+
+    private void DisposeTrayIcon()
+    {
+        if (_trayIcon is not null)
+        {
+            _trayIcon.Visible = false;
+            _trayIcon.Dispose();
+            _trayIcon = null;
+        }
+        _trayDrawingIcon?.Dispose();
+        _trayDrawingIcon = null;
     }
 
     private void Website_Click(object sender, RoutedEventArgs e)
@@ -176,7 +393,9 @@ public partial class MainWindow : Window
 
     private void ClearLog_Click(object sender, RoutedEventArgs e)
     {
-        ActivityLog.Clear();
+        _recentActivity.Clear();
+        ActivityEmptyState.Visibility = Visibility.Visible;
+        ActivitySubtitle.Text = "Latest backup results";
         try { File.WriteAllText(LogPath, string.Empty); } catch { }
     }
 
@@ -319,6 +538,8 @@ public partial class MainWindow : Window
     };
 }
 
+public sealed record RecentBackupActivity(string ProfileName, string Summary, string TimeLabel, bool IsFailure);
+
 internal static class PathHelpers
 {
     public static string Normalize(string path)
@@ -357,10 +578,13 @@ public sealed class BackupProfile : INotifyPropertyChanged
     public string ScheduleLabel => Frequency switch
     {
         "Hourly" => $"Every {EveryHours} hour{(EveryHours == 1 ? "" : "s")}",
-        "Weekly" => $"Weekly · {DayOfWeek} at {Time}",
-        _ => $"Daily at {Time}"
+        "Weekly" => $"Weekly · {DayOfWeek} at {FormattedScheduleTime}",
+        _ => $"Daily at {FormattedScheduleTime}"
     };
-    public string LastRunLabel => LastRunUtc is null ? "Last backup: Not run yet" : $"Last backup: {LastRunUtc.Value.ToLocalTime():dd MMM, HH:mm}";
+    private string FormattedScheduleTime => TimeSpan.TryParseExact(Time, "hh\\:mm", CultureInfo.InvariantCulture, out var time)
+        ? DateTime.Today.Add(time).ToString("h:mm tt", CultureInfo.InvariantCulture)
+        : Time;
+    public string LastRunLabel => LastRunUtc is null ? "Last backup: Not run yet" : $"Last backup: {LastRunUtc.Value.ToLocalTime().ToString("dd MMM, h:mm tt", CultureInfo.InvariantCulture)}";
 
     public string NextBackupLabel => GetNextBackupLabel(DateTime.Now);
 

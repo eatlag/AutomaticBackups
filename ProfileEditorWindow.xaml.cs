@@ -4,6 +4,8 @@ using System.Windows;
 using System.Windows.Controls;
 using Microsoft.Win32;
 using IOPath = System.IO.Path;
+using MessageBox = System.Windows.MessageBox;
+using OpenFileDialog = Microsoft.Win32.OpenFileDialog;
 
 namespace AutomaticBackups;
 
@@ -15,12 +17,15 @@ public partial class ProfileEditorWindow : Window
     public ProfileEditorWindow(BackupProfile? profile = null)
     {
         InitializeComponent();
+        TimeHourBox.ItemsSource = Enumerable.Range(1, 12).Select(hour => hour.ToString(CultureInfo.InvariantCulture)).ToArray();
+        TimeMinuteBox.ItemsSource = Enumerable.Range(0, 60).Select(minute => minute.ToString("00", CultureInfo.InvariantCulture)).ToArray();
+        TimePeriodBox.ItemsSource = new[] { "AM", "PM" };
         _original = profile;
         if (profile is not null)
         {
             DialogTitle.Text = "Edit backup profile";
             NameBox.Text = profile.Name; SourceBox.Text = profile.Source; DestinationBox.Text = profile.Destination;
-            HoursBox.Text = profile.EveryHours.ToString(CultureInfo.InvariantCulture); TimeBox.Text = profile.Time;
+            HoursBox.Text = profile.EveryHours.ToString(CultureInfo.InvariantCulture); SetTimeControls(profile.Time);
             RetentionBox.Text = profile.Retention.ToString(CultureInfo.InvariantCulture); ExcludeBox.Text = profile.Exclude;
             EnabledBox.IsChecked = profile.Enabled; HiddenBox.IsChecked = profile.IncludeHidden;
             SelectItem(FrequencyBox, profile.Frequency); SelectItem(DayBox, profile.DayOfWeek); SelectItem(CompressionBox, profile.Compression);
@@ -28,14 +33,39 @@ public partial class ProfileEditorWindow : Window
         else
         {
             SelectItem(FrequencyBox, "Daily"); SelectItem(DayBox, "Monday"); SelectItem(CompressionBox, "Optimal");
-            HoursBox.Text = "1"; TimeBox.Text = "09:00"; RetentionBox.Text = "10"; EnabledBox.IsChecked = true;
+            HoursBox.Text = "1"; SetTimeControls("09:00"); RetentionBox.Text = "10"; EnabledBox.IsChecked = true;
         }
         UpdateFrequencyFields();
     }
 
-    private static void SelectItem(ComboBox combo, string value)
+    private static void SelectItem(System.Windows.Controls.ComboBox combo, string value)
     {
         foreach (var item in combo.Items.OfType<ComboBoxItem>()) if (string.Equals(item.Content?.ToString(), value, StringComparison.OrdinalIgnoreCase)) { combo.SelectedItem = item; return; }
+    }
+
+    private void SetTimeControls(string value)
+    {
+        if (!TimeSpan.TryParseExact(value, "hh\\:mm", CultureInfo.InvariantCulture, out var time))
+            time = new TimeSpan(9, 0, 0);
+        var hour24 = (int)time.TotalHours;
+        var hour12 = hour24 % 12;
+        if (hour12 == 0) hour12 = 12;
+        TimeHourBox.SelectedItem = hour12.ToString(CultureInfo.InvariantCulture);
+        TimeMinuteBox.SelectedItem = time.Minutes.ToString("00", CultureInfo.InvariantCulture);
+        TimePeriodBox.SelectedItem = hour24 >= 12 ? "PM" : "AM";
+    }
+
+    private bool TryGetScheduledTime(out string value)
+    {
+        value = "";
+        if (TimeHourBox.SelectedItem is not string hourText || !int.TryParse(hourText, out var hour12) ||
+            TimeMinuteBox.SelectedItem is not string minuteText || !int.TryParse(minuteText, out var minute) ||
+            TimePeriodBox.SelectedItem is not string period || hour12 is < 1 or > 12 || minute is < 0 or > 59)
+            return false;
+
+        var hour24 = hour12 % 12 + (period == "PM" ? 12 : 0);
+        value = $"{hour24:00}:{minute:00}";
+        return true;
     }
 
     private void FrequencyBox_SelectionChanged(object sender, SelectionChangedEventArgs e) => UpdateFrequencyFields();
@@ -97,11 +127,12 @@ public partial class ProfileEditorWindow : Window
         {
             MessageBox.Show(this, "Hourly interval must be between 1 and 24 hours.", "Check backup settings", MessageBoxButton.OK, MessageBoxImage.Warning); return;
         }
-        var time = TimeBox.Text.Trim();
-        if (frequency != "Hourly" && !TimeSpan.TryParseExact(time, "hh\\:mm", CultureInfo.InvariantCulture, out _))
+        var validTime = TryGetScheduledTime(out var time);
+        if (frequency != "Hourly" && !validTime)
         {
-            MessageBox.Show(this, "Use a 24-hour time such as 09:30.", "Check backup settings", MessageBoxButton.OK, MessageBoxImage.Warning); return;
+            MessageBox.Show(this, "Choose an hour, minute, and AM/PM for the scheduled start time.", "Check backup settings", MessageBoxButton.OK, MessageBoxImage.Warning); return;
         }
+        if (!validTime) time = "09:00";
 
         Result = new BackupProfile
         {

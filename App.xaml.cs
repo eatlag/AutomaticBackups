@@ -2,14 +2,18 @@ using System.IO;
 using System.Text.Json;
 using System.Windows;
 using System.Windows.Media;
+using Color = System.Windows.Media.Color;
+using ColorConverter = System.Windows.Media.ColorConverter;
+using MessageBox = System.Windows.MessageBox;
 
 namespace AutomaticBackups;
 
-public partial class App : Application
+public partial class App : System.Windows.Application
 {
     public static string DataDirectory { get; } = Path.Combine(AppContext.BaseDirectory, "Data");
     public static string CurrentTheme { get; private set; } = "Light";
     public static bool StartWithWindows { get; private set; }
+    public static bool StartInTray { get; private set; }
     private static string SettingsPath => Path.Combine(DataDirectory, "settings.json");
 
     protected override void OnStartup(StartupEventArgs e)
@@ -25,10 +29,14 @@ public partial class App : Application
                 : new AppPreferences();
             CurrentTheme = string.Equals(settings.Theme, "Dark", StringComparison.OrdinalIgnoreCase) ? "Dark" : "Light";
             StartWithWindows = settings.StartWithWindows;
+            StartInTray = settings.StartInTray;
+            if (StartWithWindows) StartupRegistration.SetEnabled(true, StartInTray);
             ApplyTheme(CurrentTheme);
             base.OnStartup(e);
             MainWindow = new MainWindow();
             MainWindow.Show();
+            if (e.Args.Any(arg => string.Equals(arg, "--tray", StringComparison.OrdinalIgnoreCase)))
+                ((MainWindow)MainWindow).StartMinimizedToTray();
         }
         catch (Exception ex)
         {
@@ -40,7 +48,7 @@ public partial class App : Application
     public static void SetTheme(string theme)
     {
         var nextTheme = string.Equals(theme, "Dark", StringComparison.OrdinalIgnoreCase) ? "Dark" : "Light";
-        var updated = new AppPreferences { Theme = nextTheme, StartWithWindows = StartWithWindows };
+        var updated = new AppPreferences { Theme = nextTheme, StartWithWindows = StartWithWindows, StartInTray = StartInTray };
         SavePreferences(updated);
         CurrentTheme = nextTheme;
         ApplyTheme(nextTheme);
@@ -48,9 +56,16 @@ public partial class App : Application
 
     public static void SetStartWithWindows(bool enabled)
     {
-        var updated = new AppPreferences { Theme = CurrentTheme, StartWithWindows = enabled };
+        var updated = new AppPreferences { Theme = CurrentTheme, StartWithWindows = enabled, StartInTray = StartInTray };
         SavePreferences(updated);
         StartWithWindows = enabled;
+    }
+
+    public static void SetStartInTray(bool enabled)
+    {
+        var updated = new AppPreferences { Theme = CurrentTheme, StartWithWindows = StartWithWindows, StartInTray = enabled };
+        SavePreferences(updated);
+        StartInTray = enabled;
     }
 
     private static void SavePreferences(AppPreferences preferences)
@@ -101,4 +116,5 @@ public sealed class AppPreferences
 {
     public string Theme { get; set; } = "Light";
     public bool StartWithWindows { get; set; }
+    public bool StartInTray { get; set; }
 }

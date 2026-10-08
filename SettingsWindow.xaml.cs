@@ -1,6 +1,7 @@
 using Microsoft.Win32;
 using System.Windows;
 using System.Diagnostics;
+using MessageBox = System.Windows.MessageBox;
 
 namespace AutomaticBackups;
 
@@ -15,6 +16,8 @@ public partial class SettingsWindow : Window
             if (string.Equals(item.Content?.ToString(), App.CurrentTheme, StringComparison.OrdinalIgnoreCase)) ThemeSelector.SelectedItem = item;
         }
         RunOnLogonCheckBox.IsChecked = StartupRegistration.IsEnabled();
+        StartInTrayCheckBox.IsChecked = App.StartInTray;
+        StartInTrayCheckBox.IsEnabled = RunOnLogonCheckBox.IsChecked == true;
         DataDirectoryText.Text = App.DataDirectory;
         _initializing = false;
     }
@@ -40,15 +43,36 @@ public partial class SettingsWindow : Window
         if (_initializing) return;
         try
         {
-            StartupRegistration.SetEnabled(RunOnLogonCheckBox.IsChecked == true);
-            App.SetStartWithWindows(RunOnLogonCheckBox.IsChecked == true);
+            var enabled = RunOnLogonCheckBox.IsChecked == true;
+            StartupRegistration.SetEnabled(enabled, App.StartInTray);
+            App.SetStartWithWindows(enabled);
+            StartInTrayCheckBox.IsEnabled = enabled;
         }
         catch (Exception ex)
         {
             _initializing = true;
             RunOnLogonCheckBox.IsChecked = StartupRegistration.IsEnabled();
+            StartInTrayCheckBox.IsEnabled = RunOnLogonCheckBox.IsChecked == true;
             _initializing = false;
             MessageBox.Show(this, $"Windows couldn't update the sign-in startup setting.\n\n{ex.Message}", "Settings", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+    }
+
+    private void StartInTray_Changed(object sender, RoutedEventArgs e)
+    {
+        if (_initializing) return;
+        var enabled = StartInTrayCheckBox.IsChecked == true;
+        try
+        {
+            if (StartupRegistration.IsEnabled()) StartupRegistration.SetEnabled(true, enabled);
+            App.SetStartInTray(enabled);
+        }
+        catch (Exception ex)
+        {
+            _initializing = true;
+            StartInTrayCheckBox.IsChecked = App.StartInTray;
+            _initializing = false;
+            MessageBox.Show(this, $"The system tray startup setting couldn't be saved.\n\n{ex.Message}", "Settings", MessageBoxButton.OK, MessageBoxImage.Warning);
         }
     }
 
@@ -76,13 +100,14 @@ internal static class StartupRegistration
         return key?.GetValue(ValueName) is string value && !string.IsNullOrWhiteSpace(value);
     }
 
-    public static void SetEnabled(bool enabled)
+    public static void SetEnabled(bool enabled, bool startInTray)
     {
         using var key = Registry.CurrentUser.CreateSubKey(RunKeyPath, true) ?? throw new InvalidOperationException("The current-user startup settings are unavailable.");
         if (enabled)
         {
             var exePath = Environment.ProcessPath ?? throw new InvalidOperationException("The app's executable path couldn't be found.");
-            key.SetValue(ValueName, $"\"{exePath}\"", RegistryValueKind.String);
+            var launchOption = startInTray ? " --tray" : string.Empty;
+            key.SetValue(ValueName, $"\"{exePath}\"{launchOption}", RegistryValueKind.String);
         }
         else
         {
