@@ -176,11 +176,21 @@ public partial class ProfileEditorWindow : Window
     private void Save_Click(object sender, RoutedEventArgs e)
     {
         var name = NameBox.Text.Trim(); var source = SourceBox.Text.Trim(); var destination = DestinationBox.Text.Trim();
-        if (string.IsNullOrWhiteSpace(name) || !File.Exists(source) && !Directory.Exists(source) || !Directory.Exists(destination))
+        var includeDatabase = IncludeDatabaseBox.IsChecked == true;
+        var sourceExists = File.Exists(source) || Directory.Exists(source);
+        if (string.IsNullOrWhiteSpace(name) || !Directory.Exists(destination)
+            || (!includeDatabase && !sourceExists) || (!string.IsNullOrWhiteSpace(source) && !sourceExists))
         {
-            MessageBox.Show(this, "Enter a name, an existing source file or folder, and an existing destination folder.", "Check backup settings", MessageBoxButton.OK, MessageBoxImage.Warning); return;
+            var reason = string.IsNullOrWhiteSpace(name)
+                ? "Add a name for this backup profile."
+                : !Directory.Exists(destination)
+                    ? "Choose an existing destination folder for the ZIP file."
+                    : includeDatabase
+                        ? "The source file or folder could not be found. Clear the source field to create a database-only backup, or choose an existing source."
+                        : "Choose an existing source file or folder, and an existing destination folder.";
+            new ValidationNoticeWindow("Check backup settings", reason) { Owner = this }.ShowDialog(); return;
         }
-        source = PathHelpers.Normalize(source);
+        source = sourceExists ? PathHelpers.Normalize(source) : string.Empty;
         destination = PathHelpers.Normalize(destination);
         if (Directory.Exists(source) && (string.Equals(source, destination, StringComparison.OrdinalIgnoreCase) || PathHelpers.IsChildPath(source, destination)))
         {
@@ -199,7 +209,6 @@ public partial class ProfileEditorWindow : Window
         {
             MessageBox.Show(this, "Choose a day of the month between 1 and 31.", "Check backup settings", MessageBoxButton.OK, MessageBoxImage.Warning); return;
         }
-        var includeDatabase = IncludeDatabaseBox.IsChecked == true;
         var databaseName = DatabaseSelector.SelectedItem?.ToString() ?? _original?.DatabaseName ?? string.Empty;
         var databaseUsername = DatabaseUsernameBox.Text.Trim();
         var databasePort = _original?.DatabasePort ?? 3306;

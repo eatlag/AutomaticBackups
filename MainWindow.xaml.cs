@@ -491,7 +491,7 @@ public partial class MainWindow : Window
             try { SaveProfiles(); } catch (Exception saveEx) { Log($"Could not save the failed attempt time for {profile.Name}: {saveEx.Message}", true); }
             Log($"Backup failed · {profile.Name} · {ex.Message}", true);
             if (!scheduled)
-                MessageBox.Show(this, $"Backup failed for ‘{profile.Name}’:\n\n{ex.Message}", "Automatic Backups", MessageBoxButton.OK, MessageBoxImage.Error);
+                new BackupErrorWindow(profile.Name, ex.Message) { Owner = this }.ShowDialog();
         }
         finally
         {
@@ -501,21 +501,23 @@ public partial class MainWindow : Window
 
     private static (string Archive, int Count, long Size) CreateArchive(BackupProfile profile)
     {
-        var source = PathHelpers.Normalize(profile.Source);
+        var source = string.IsNullOrWhiteSpace(profile.Source) ? string.Empty : PathHelpers.Normalize(profile.Source);
         var destination = PathHelpers.Normalize(profile.Destination);
-        if (!File.Exists(source) && !Directory.Exists(source)) throw new DirectoryNotFoundException("The selected source no longer exists.");
+        var sourceExists = File.Exists(source) || Directory.Exists(source);
+        if (!sourceExists && !profile.IncludeDatabaseBackup) throw new DirectoryNotFoundException("The selected source no longer exists.");
+        if (!sourceExists && !string.IsNullOrWhiteSpace(profile.Source)) throw new DirectoryNotFoundException("The selected source no longer exists.");
         if (!Directory.Exists(destination)) throw new DirectoryNotFoundException("The destination folder no longer exists.");
-        var sourceIsDirectory = Directory.Exists(source);
+        var sourceIsDirectory = sourceExists && Directory.Exists(source);
         if (sourceIsDirectory && (string.Equals(source, destination, StringComparison.OrdinalIgnoreCase) || PathHelpers.IsChildPath(source, destination)))
             throw new IOException("The destination cannot be the source folder or a folder inside it.");
 
         var patterns = profile.Exclude.Split([',', '\r', '\n'], StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
         var files = new List<(string FullPath, string Entry)>();
-        if (!sourceIsDirectory)
+        if (sourceExists && !sourceIsDirectory)
         {
             files.Add((source, IOPath.GetFileName(source)));
         }
-        else
+        else if (sourceIsDirectory)
         {
             CollectFiles(source, source, profile.IncludeHidden, patterns, files);
         }
@@ -547,7 +549,7 @@ public partial class MainWindow : Window
             using (var archive = ZipFile.Open(tempPath, ZipArchiveMode.Create))
             {
                 foreach (var (fullPath, entry) in files)
-                    ZipFileExtensions.CreateEntryFromFile(archive, fullPath, entry.Replace('\\', '/'), compression);
+                    AddFileToArchive(archive, fullPath, entry.Replace('\\', '/'), compression);
             }
             File.Move(tempPath, finalPath, true);
             if (profile.Retention > 0)
@@ -570,6 +572,16 @@ public partial class MainWindow : Window
         {
             try { if (databaseDumpPath is not null && File.Exists(databaseDumpPath)) File.Delete(databaseDumpPath); } catch { }
         }
+    }
+
+    private static void AddFileToArchive(ZipArchive archive, string sourcePath, string entryName, CompressionLevel compression)
+    {
+        // Match Explorer-style read sharing so files that are open for writing can still be copied
+        // when their owner permits other processes to read them.
+        using var source = new FileStream(sourcePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+        var entry = archive.CreateEntry(entryName, compression);
+        using var destination = entry.Open();
+        source.CopyTo(destination);
     }
 
     private static void CollectFiles(string root, string current, bool includeHidden, string[] patterns, List<(string FullPath, string Entry)> files)

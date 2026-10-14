@@ -10,7 +10,7 @@
         <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
             <StackPanel>
                 <TextBlock Text="PROFILE NAME" Foreground="{DynamicResource TextMuted}" FontSize="10" FontWeight="Bold" Margin="0,0,0,5"/><TextBox x:Name="NameBox" Margin="0,0,0,12"/>
-                <TextBlock Text="SOURCE FOLDER OR FILE" Foreground="{DynamicResource TextMuted}" FontSize="10" FontWeight="Bold" Margin="0,0,0,5"/>
+                <TextBlock Text="SOURCE FOLDER OR FILE (OPTIONAL WITH DATABASE BACKUP)" Foreground="{DynamicResource TextMuted}" FontSize="10" FontWeight="Bold" Margin="0,0,0,5"/>
                 <Grid Margin="0,0,0,12"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><TextBox x:Name="SourceBox"/><Button x:Name="BrowseSourceButton" Grid.Column="1" Content="Browse folders" Margin="8,0,0,0" Padding="10,7" Click="BrowseSourceFolder_Click"/><Button Grid.Column="2" Content="Choose file" Margin="6,0,0,0" Padding="10,7" Click="BrowseSourceFile_Click"/></Grid>
                 <TextBlock Text="DESTINATION FOLDER" Foreground="{DynamicResource TextMuted}" FontSize="10" FontWeight="Bold" Margin="0,0,0,5"/>
                 <Grid Margin="0,0,0,13"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><TextBox x:Name="DestinationBox"/><Button Grid.Column="1" Content="Browse" Margin="8,0,0,0" Padding="12,7" Click="BrowseDestination_Click"/></Grid>
