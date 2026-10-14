@@ -15,6 +15,7 @@ public partial class SettingsWindow : Window
         {
             if (string.Equals(item.Content?.ToString(), App.CurrentTheme, StringComparison.OrdinalIgnoreCase)) ThemeSelector.SelectedItem = item;
         }
+        SelectHistoryLimit(App.RecentHistoryLimit);
         RunOnLogonCheckBox.IsChecked = StartupRegistration.IsEnabled();
         StartInTrayCheckBox.IsChecked = App.StartInTray;
         StartInTrayCheckBox.IsEnabled = RunOnLogonCheckBox.IsChecked == true;
@@ -35,6 +36,37 @@ public partial class SettingsWindow : Window
             }
             _initializing = false;
             MessageBox.Show(this, $"The appearance setting couldn't be saved in the app's Data folder.\n\n{ex.Message}", "Settings", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+    }
+
+    private void HistoryLimit_SelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
+    {
+        if (_initializing || HistoryLimitSelector.SelectedItem is not System.Windows.Controls.ComboBoxItem item) return;
+        var selected = item.Content?.ToString();
+        var limit = string.Equals(selected, "Unlimited", StringComparison.OrdinalIgnoreCase)
+            ? 0
+            : int.TryParse(selected, out var parsed) ? parsed : App.RecentHistoryLimit;
+        try
+        {
+            App.SetRecentHistoryLimit(limit);
+            if (App.Current.MainWindow is MainWindow mainWindow) mainWindow.ReloadBackupHistory();
+        }
+        catch (Exception ex)
+        {
+            _initializing = true;
+            SelectHistoryLimit(App.RecentHistoryLimit);
+            _initializing = false;
+            MessageBox.Show(this, $"The backup history setting couldn't be saved in the app's Data folder.\n\n{ex.Message}", "Settings", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+    }
+
+    private void SelectHistoryLimit(int limit)
+    {
+        var value = limit == 0 ? "Unlimited" : limit.ToString();
+        foreach (var item in HistoryLimitSelector.Items.OfType<System.Windows.Controls.ComboBoxItem>())
+        {
+            if (string.Equals(item.Content?.ToString(), value, StringComparison.OrdinalIgnoreCase))
+                HistoryLimitSelector.SelectedItem = item;
         }
     }
 

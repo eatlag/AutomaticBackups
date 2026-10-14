@@ -14,6 +14,7 @@ public partial class App : System.Windows.Application
     public static string CurrentTheme { get; private set; } = "Light";
     public static bool StartWithWindows { get; private set; }
     public static bool StartInTray { get; private set; }
+    public static int RecentHistoryLimit { get; private set; } = 25;
     private static string SettingsPath => Path.Combine(DataDirectory, "settings.json");
 
     protected override void OnStartup(StartupEventArgs e)
@@ -30,6 +31,7 @@ public partial class App : System.Windows.Application
             CurrentTheme = string.Equals(settings.Theme, "Dark", StringComparison.OrdinalIgnoreCase) ? "Dark" : "Light";
             StartWithWindows = settings.StartWithWindows;
             StartInTray = settings.StartInTray;
+            RecentHistoryLimit = IsValidHistoryLimit(settings.RecentHistoryLimit) ? settings.RecentHistoryLimit : 25;
             if (StartWithWindows) StartupRegistration.SetEnabled(true, StartInTray);
             ApplyTheme(CurrentTheme);
             base.OnStartup(e);
@@ -48,7 +50,7 @@ public partial class App : System.Windows.Application
     public static void SetTheme(string theme)
     {
         var nextTheme = string.Equals(theme, "Dark", StringComparison.OrdinalIgnoreCase) ? "Dark" : "Light";
-        var updated = new AppPreferences { Theme = nextTheme, StartWithWindows = StartWithWindows, StartInTray = StartInTray };
+        var updated = new AppPreferences { Theme = nextTheme, StartWithWindows = StartWithWindows, StartInTray = StartInTray, RecentHistoryLimit = RecentHistoryLimit };
         SavePreferences(updated);
         CurrentTheme = nextTheme;
         ApplyTheme(nextTheme);
@@ -56,17 +58,27 @@ public partial class App : System.Windows.Application
 
     public static void SetStartWithWindows(bool enabled)
     {
-        var updated = new AppPreferences { Theme = CurrentTheme, StartWithWindows = enabled, StartInTray = StartInTray };
+        var updated = new AppPreferences { Theme = CurrentTheme, StartWithWindows = enabled, StartInTray = StartInTray, RecentHistoryLimit = RecentHistoryLimit };
         SavePreferences(updated);
         StartWithWindows = enabled;
     }
 
     public static void SetStartInTray(bool enabled)
     {
-        var updated = new AppPreferences { Theme = CurrentTheme, StartWithWindows = StartWithWindows, StartInTray = enabled };
+        var updated = new AppPreferences { Theme = CurrentTheme, StartWithWindows = StartWithWindows, StartInTray = enabled, RecentHistoryLimit = RecentHistoryLimit };
         SavePreferences(updated);
         StartInTray = enabled;
     }
+
+    public static void SetRecentHistoryLimit(int limit)
+    {
+        if (!IsValidHistoryLimit(limit)) throw new ArgumentOutOfRangeException(nameof(limit));
+        var updated = new AppPreferences { Theme = CurrentTheme, StartWithWindows = StartWithWindows, StartInTray = StartInTray, RecentHistoryLimit = limit };
+        SavePreferences(updated);
+        RecentHistoryLimit = limit;
+    }
+
+    private static bool IsValidHistoryLimit(int limit) => limit == 0 || limit is 1 or 5 or 10 or 25 or 50 or 100 or 200;
 
     private static void SavePreferences(AppPreferences preferences)
     {
@@ -117,4 +129,5 @@ public sealed class AppPreferences
     public string Theme { get; set; } = "Light";
     public bool StartWithWindows { get; set; }
     public bool StartInTray { get; set; }
+    public int RecentHistoryLimit { get; set; } = 25;
 }

@@ -85,12 +85,18 @@ public partial class MainWindow : Window
 
     private void LoadLog()
     {
+        _recentActivity.Clear();
         try
         {
             if (File.Exists(LogPath))
-                foreach (var line in File.ReadLines(LogPath).TakeLast(150)) AddActivityFromLog(line);
+            {
+                var lines = File.ReadLines(LogPath);
+                if (App.RecentHistoryLimit > 0) lines = lines.TakeLast(Math.Max(1000, App.RecentHistoryLimit * 50));
+                foreach (var line in lines) AddActivityFromLog(line);
+            }
         }
         catch { }
+        UpdateActivityHistoryStatus();
     }
 
     private void Log(string message, bool error = false)
@@ -110,10 +116,22 @@ public partial class MainWindow : Window
     {
         if (!TryParseBackupActivity(line, out var activity) || activity is null) return;
         _recentActivity.Insert(0, activity);
-        while (_recentActivity.Count > 5) _recentActivity.RemoveAt(_recentActivity.Count - 1);
+        while (App.RecentHistoryLimit > 0 && _recentActivity.Count > App.RecentHistoryLimit) _recentActivity.RemoveAt(_recentActivity.Count - 1);
         ActivityEmptyState.Visibility = _recentActivity.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
-        ActivitySubtitle.Text = _recentActivity.Count == 0 ? "Latest backup results" : $"Last {_recentActivity.Count} backup result{(_recentActivity.Count == 1 ? "" : "s")}";
+        UpdateActivityHistoryStatus();
     }
+
+    private void UpdateActivityHistoryStatus()
+    {
+        ActivityEmptyState.Visibility = _recentActivity.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+        ActivitySubtitle.Text = _recentActivity.Count == 0
+            ? "Latest backup results"
+            : App.RecentHistoryLimit == 0
+                ? $"All {_recentActivity.Count} backup results"
+                : $"Last {_recentActivity.Count} backup result{(_recentActivity.Count == 1 ? "" : "s")}";
+    }
+
+    public void ReloadBackupHistory() => LoadLog();
 
     private static bool TryParseBackupActivity(string line, out RecentBackupActivity? activity)
     {
@@ -172,23 +190,30 @@ public partial class MainWindow : Window
         ProfileCount.Text = _profiles.Count == 1 ? "1 profile configured" : $"{_profiles.Count} profiles configured";
         EmptyState.Visibility = _profiles.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
         var enabled = _profiles.Where(p => p.Enabled).ToArray();
-        StatNext.Text = enabled.Length == 0 ? "Not scheduled" : $"{enabled.Length} active schedule{(enabled.Length == 1 ? "" : "s")} · checks every 20 sec";
+        StatActiveSchedules.Text = enabled.Length.ToString(CultureInfo.InvariantCulture);
         var selected = ProfileList.SelectedItem as BackupProfile;
         var hasSelection = selected is not null;
         RunButton.IsEnabled = hasSelection && !_busy;
+        PauseButton.IsEnabled = hasSelection && !_busy;
+        PauseButton.Content = selected?.Enabled == false ? "Resume Backups" : "Pause Backups";
         EditButton.IsEnabled = hasSelection && !_busy;
         DeleteButton.IsEnabled = hasSelection && !_busy;
         if (selected is null)
         {
             SelectedName.Text = "Select a backup"; SelectedSchedule.Text = "Your backup details will appear here.";
-            SelectedSource.Text = "—"; SelectedDestination.Text = "—"; SelectedOptions.Text = "Choose a profile to view its ZIP and retention settings.";
+            SelectedSource.Text = "—"; SelectedSource.ToolTip = null;
+            SelectedDestination.Text = "—"; SelectedDestination.ToolTip = null;
+            SelectedOptions.Text = "Choose a profile to view its ZIP and retention settings.";
         }
         else
         {
             SelectedName.Text = selected.Name;
             SelectedSchedule.Text = selected.Enabled ? selected.ScheduleLabel : $"{selected.ScheduleLabel} · Paused";
-            SelectedSource.Text = selected.Source; SelectedDestination.Text = selected.Destination;
-            SelectedOptions.Text = $"{selected.Compression} compression  ·  Keep newest {selected.Retention} ZIPs\nExclusions: {(string.IsNullOrWhiteSpace(selected.Exclude) ? "None" : selected.Exclude)}";
+            SelectedSource.Text = selected.Source; SelectedSource.ToolTip = selected.Source;
+            SelectedDestination.Text = selected.Destination; SelectedDestination.ToolTip = selected.Destination;
+            var retentionSummary = selected.Retention == 0 ? "Keep all ZIPs" : $"Keep newest {selected.Retention} ZIPs";
+            var databaseSummary = selected.IncludeDatabaseBackup ? $"\nXAMPP database: {selected.DatabaseName}" : string.Empty;
+            SelectedOptions.Text = $"{selected.Compression} compression  ·  {retentionSummary}{databaseSummary}\nExclusions: {(string.IsNullOrWhiteSpace(selected.Exclude) ? "None" : selected.Exclude)}";
         }
         UpdateDestinationCapacity();
     }
@@ -391,6 +416,25 @@ public partial class MainWindow : Window
         if (ProfileList.SelectedItem is BackupProfile profile) await RunBackupAsync(profile, false);
     }
 
+    private void PauseSelected_Click(object sender, RoutedEventArgs e)
+    {
+        if (ProfileList.SelectedItem is not BackupProfile profile || _busy) return;
+        var wasEnabled = profile.Enabled;
+        profile.Enabled = !wasEnabled;
+        try
+        {
+            SaveProfiles();
+            RefreshDashboard();
+            Log($"Schedule {(profile.Enabled ? "resumed" : "paused")} · {profile.Name}");
+        }
+        catch (Exception ex)
+        {
+            profile.Enabled = wasEnabled;
+            RefreshDashboard();
+            MessageBox.Show(this, $"The schedule couldn't be updated.\n\n{ex.Message}", "Automatic Backups", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+    }
+
     private void ClearLog_Click(object sender, RoutedEventArgs e)
     {
         _recentActivity.Clear();
@@ -410,34 +454,48 @@ public partial class MainWindow : Window
     {
         if (!p.Enabled) return false;
         var now = DateTime.Now;
-        var last = p.LastRunUtc?.ToLocalTime();
+        var last = (p.LastAttemptUtc ?? p.LastRunUtc)?.ToLocalTime();
         if (p.Frequency == "Hourly") return last is null || (now - last.Value).TotalHours >= p.EveryHours;
-        if (last?.Date == now.Date) return false;
         if (!TimeSpan.TryParseExact(p.Time, "hh\\:mm", null, out var time)) return false;
-        if (now.TimeOfDay < time) return false;
+        if (p.Frequency == "Monthly")
+        {
+            var scheduled = MonthlyOccurrence(now.Year, now.Month, p.DayOfMonth, time);
+            return now >= scheduled && (last is null || last.Value < scheduled);
+        }
+        if (last?.Date == now.Date || now.TimeOfDay < time) return false;
         return p.Frequency == "Daily" || (p.Frequency == "Weekly" && now.DayOfWeek.ToString() == p.DayOfWeek);
+    }
+
+    internal static DateTime MonthlyOccurrence(int year, int month, int dayOfMonth, TimeSpan time)
+    {
+        var day = Math.Clamp(dayOfMonth, 1, DateTime.DaysInMonth(year, month));
+        return new DateTime(year, month, day).Add(time);
     }
 
     private async Task RunBackupAsync(BackupProfile profile, bool scheduled)
     {
         if (_busy) return;
-        _busy = true; RunButton.IsEnabled = false; (ScheduleStatus.Text, ScheduleStatus.Foreground) = ("●  BACKUP RUNNING", Brushes.DarkOrange);
+        _busy = true; profile.IsRunning = true; RunButton.IsEnabled = false; (ScheduleStatus.Text, ScheduleStatus.Foreground) = ("●  BACKUP RUNNING", Brushes.DarkOrange);
         Log($"{(scheduled ? "Scheduled backup started" : "Backup started")} · {profile.Name}");
         try
         {
             var result = await Task.Run(() => CreateArchive(profile));
-            profile.LastRunUtc = DateTime.UtcNow;
+            profile.LastAttemptUtc = DateTime.UtcNow;
+            profile.LastRunUtc = profile.LastAttemptUtc;
             SaveProfiles(); RefreshDashboard();
             Log($"Backup complete · {profile.Name} · {result.Count:N0} files · {FormatSize(result.Size)} · {result.Archive}");
         }
         catch (Exception ex)
         {
+            profile.LastAttemptUtc = DateTime.UtcNow;
+            try { SaveProfiles(); } catch (Exception saveEx) { Log($"Could not save the failed attempt time for {profile.Name}: {saveEx.Message}", true); }
             Log($"Backup failed · {profile.Name} · {ex.Message}", true);
-            MessageBox.Show(this, $"Backup failed for ‘{profile.Name}’:\n\n{ex.Message}", "Automatic Backups", MessageBoxButton.OK, MessageBoxImage.Error);
+            if (!scheduled)
+                MessageBox.Show(this, $"Backup failed for ‘{profile.Name}’:\n\n{ex.Message}", "Automatic Backups", MessageBoxButton.OK, MessageBoxImage.Error);
         }
         finally
         {
-            _busy = false; ScheduleStatus.Text = "●  READY"; ScheduleStatus.Foreground = Brushes.ForestGreen; RefreshDashboard();
+            profile.IsRunning = false; _busy = false; ScheduleStatus.Text = "●  READY"; ScheduleStatus.Foreground = Brushes.ForestGreen; RefreshDashboard();
         }
     }
 
@@ -461,33 +519,45 @@ public partial class MainWindow : Window
         {
             CollectFiles(source, source, profile.IncludeHidden, patterns, files);
         }
-        if (files.Count == 0) throw new IOException("No files were found to back up. Check the source and exclusions.");
-
         var safeName = string.Concat(profile.Name.Select(c => "<>:\"/\\|?*".Contains(c) || char.IsControl(c) ? '_' : c)).Trim().TrimEnd('.');
         if (string.IsNullOrWhiteSpace(safeName)) safeName = "Backup";
         var timestamp = DateTime.Now.ToString("yyyy-MM-dd_HH-mm-ss-fff");
         var finalPath = IOPath.Combine(destination, $"{safeName}_{timestamp}.zip");
-        var tempPath = IOPath.Combine(destination, $".{safeName}_{timestamp}.tmp.zip");
+        var tempPath = IOPath.Combine(destination, $"{safeName}_{timestamp}.tmp.zip");
         var compression = profile.Compression switch
         {
             "Fastest" => CompressionLevel.Fastest,
             "No compression" => CompressionLevel.NoCompression,
             _ => CompressionLevel.Optimal
         };
+        string? databaseDumpPath = null;
 
         try
         {
+            if (profile.IncludeDatabaseBackup)
+            {
+                databaseDumpPath = IOPath.Combine(IOPath.GetTempPath(), $"automatic-backups-db-{Guid.NewGuid():N}.sql");
+                XamppDatabaseBackup.CreateDump(profile, databaseDumpPath);
+                var safeDatabaseName = string.Concat(profile.DatabaseName.Select(c => char.IsLetterOrDigit(c) || ".-_".Contains(c) ? c : '_'));
+                if (string.IsNullOrWhiteSpace(safeDatabaseName)) safeDatabaseName = "Database";
+                files.Add((databaseDumpPath, $"DatabaseBackups/{safeDatabaseName}.sql"));
+            }
+            if (files.Count == 0) throw new IOException("No files were found to back up. Check the source and exclusions.");
+
             using (var archive = ZipFile.Open(tempPath, ZipArchiveMode.Create))
             {
                 foreach (var (fullPath, entry) in files)
                     ZipFileExtensions.CreateEntryFromFile(archive, fullPath, entry.Replace('\\', '/'), compression);
             }
             File.Move(tempPath, finalPath, true);
-            var oldArchives = Directory.EnumerateFiles(destination, $"{safeName}_*.zip")
-                .OrderByDescending(File.GetLastWriteTimeUtc).Skip(profile.Retention);
-            foreach (var old in oldArchives)
+            if (profile.Retention > 0)
             {
-                try { File.Delete(old); } catch { }
+                var oldArchives = Directory.EnumerateFiles(destination, $"{safeName}_*.zip")
+                    .OrderByDescending(File.GetLastWriteTimeUtc).Skip(profile.Retention);
+                foreach (var old in oldArchives)
+                {
+                    try { File.Delete(old); } catch { }
+                }
             }
             return (finalPath, files.Count, new FileInfo(finalPath).Length);
         }
@@ -495,6 +565,10 @@ public partial class MainWindow : Window
         {
             try { if (File.Exists(tempPath)) File.Delete(tempPath); } catch { }
             throw;
+        }
+        finally
+        {
+            try { if (databaseDumpPath is not null && File.Exists(databaseDumpPath)) File.Delete(databaseDumpPath); } catch { }
         }
     }
 
@@ -568,17 +642,39 @@ public sealed class BackupProfile : INotifyPropertyChanged
     public int EveryHours { get; set; } = 1;
     public string Time { get; set; } = "09:00";
     public string DayOfWeek { get; set; } = "Monday";
+    public int DayOfMonth { get; set; } = 1;
     public int Retention { get; set; } = 10;
     public string Compression { get; set; } = "Optimal";
     public string Exclude { get; set; } = "";
     public bool IncludeHidden { get; set; }
+    public bool IncludeDatabaseBackup { get; set; }
+    public string DatabaseName { get; set; } = "";
+    public string XamppDirectory { get; set; } = @"C:\xampp";
+    public string DatabaseUsername { get; set; } = "root";
+    public int DatabasePort { get; set; } = 3306;
+    public string DatabasePasswordProtected { get; set; } = "";
     public bool Enabled { get; set; } = true;
+    private bool _isRunning;
+    public bool IsRunning
+    {
+        get => _isRunning;
+        set
+        {
+            if (_isRunning == value) return;
+            _isRunning = value;
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsRunning)));
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(StatusLabel)));
+        }
+    }
+    public string StatusLabel => IsRunning ? "●  IN PROGRESS" : Enabled ? "●  ACTIVE" : "Ⅱ  PAUSED";
     public DateTime? LastRunUtc { get; set; }
+    public DateTime? LastAttemptUtc { get; set; }
     public event PropertyChangedEventHandler? PropertyChanged;
     public string ScheduleLabel => Frequency switch
     {
         "Hourly" => $"Every {EveryHours} hour{(EveryHours == 1 ? "" : "s")}",
         "Weekly" => $"Weekly · {DayOfWeek} at {FormattedScheduleTime}",
+        "Monthly" => $"Monthly · Day {DayOfMonth} at {FormattedScheduleTime}",
         _ => $"Daily at {FormattedScheduleTime}"
     };
     private string FormattedScheduleTime => TimeSpan.TryParseExact(Time, "hh\\:mm", CultureInfo.InvariantCulture, out var time)
@@ -596,25 +692,35 @@ public sealed class BackupProfile : INotifyPropertyChanged
     private string GetNextBackupLabel(DateTime now)
     {
         if (!Enabled) return "Next backup: Schedule paused";
-        if (Frequency == "Hourly" && LastRunUtc is null) return "Next backup: Due on first check";
+        var lastAttempt = (LastAttemptUtc ?? LastRunUtc)?.ToLocalTime();
+        if (Frequency == "Hourly" && lastAttempt is null) return "Next backup: Due on first check";
         if (!TimeSpan.TryParseExact(Time, "hh\\:mm", null, out var time)) return "Next backup: Check schedule settings";
 
         DateTime next;
         if (Frequency == "Hourly")
         {
-            next = LastRunUtc!.Value.ToLocalTime().AddHours(Math.Clamp(EveryHours, 1, 24));
+            next = lastAttempt!.Value.AddHours(Math.Clamp(EveryHours, 1, 24));
         }
         else if (Frequency == "Weekly")
         {
             if (!Enum.TryParse<DayOfWeek>(DayOfWeek, out var day)) return "Next backup: Check schedule settings";
             var offset = ((int)day - (int)now.DayOfWeek + 7) % 7;
             next = now.Date.AddDays(offset).Add(time);
-            if (LastRunUtc?.ToLocalTime().Date == next.Date) next = next.AddDays(7);
+            if (lastAttempt?.Date == next.Date) next = next.AddDays(7);
+        }
+        else if (Frequency == "Monthly")
+        {
+            next = MainWindow.MonthlyOccurrence(now.Year, now.Month, DayOfMonth, time);
+            if (next <= now || (lastAttempt is not null && lastAttempt.Value >= next))
+            {
+                var followingMonth = now.AddMonths(1);
+                next = MainWindow.MonthlyOccurrence(followingMonth.Year, followingMonth.Month, DayOfMonth, time);
+            }
         }
         else
         {
             next = now.Date.Add(time);
-            if (LastRunUtc?.ToLocalTime().Date == now.Date) next = next.AddDays(1);
+            if (lastAttempt?.Date == now.Date) next = next.AddDays(1);
         }
 
         if (next < now) next = now;

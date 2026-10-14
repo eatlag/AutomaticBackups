@@ -55,8 +55,8 @@
                             <Border x:Name="ToggleBorder" Background="{DynamicResource InputSurface}"
                                     BorderBrush="{DynamicResource CardBorder}" BorderThickness="1" CornerRadius="9">
                                 <Grid Margin="{TemplateBinding Padding}">
-                                    <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="20"/></Grid.ColumnDefinitions>
-                                    <ContentPresenter Grid.Column="0" Margin="0,0,5,0" VerticalAlignment="Center"
+                                    <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="16"/></Grid.ColumnDefinitions>
+                                    <ContentPresenter Grid.Column="0" Margin="0,0,3,0" VerticalAlignment="Center"
                                                       HorizontalAlignment="Left" Content="{Binding SelectionBoxItem, RelativeSource={RelativeSource AncestorType=ComboBox}}"
                                                       ContentTemplate="{Binding SelectionBoxItemTemplate, RelativeSource={RelativeSource AncestorType=ComboBox}}"
                                                       ContentStringFormat="{Binding SelectionBoxItemStringFormat, RelativeSource={RelativeSource AncestorType=ComboBox}}"
@@ -105,6 +105,49 @@
                 </ControlTemplate.Triggers>
             </ControlTemplate></Setter.Value></Setter>
         </Style>
-        <Style TargetType="CheckBox"><Setter Property="Foreground" Value="{DynamicResource TextPrimary}"/><Setter Property="FontSize" Value="12"/><Setter Property="Margin" Value="0,5,12,5"/></Style>
+        <Style TargetType="CheckBox">
+            <Setter Property="Foreground" Value="{DynamicResource TextPrimary}"/>
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="Margin" Value="0,5,12,5"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Setter Property="Focusable" Value="True"/>
+            <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="CheckBox">
+                <Grid Background="Transparent" SnapsToDevicePixels="True">
+                    <Grid.ColumnDefinitions><ColumnDefinition Width="28"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                    <Grid Width="28" Height="28" Background="Transparent">
+                        <Border x:Name="CheckSurface" Width="22" Height="22" CornerRadius="7"
+                                Background="{DynamicResource InputSurface}"
+                                BorderBrush="{DynamicResource CardBorder}" BorderThickness="1.5"
+                                HorizontalAlignment="Center" VerticalAlignment="Center">
+                            <Path x:Name="CheckMark" Data="M 4 11 L 9 16 L 18 6" Stroke="White"
+                                  StrokeThickness="2.4" StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                                  StrokeLineJoin="Round" HorizontalAlignment="Center" VerticalAlignment="Center"
+                                  Width="18" Height="18" Stretch="Uniform" Visibility="Collapsed"/>
+                        </Border>
+                        <Border x:Name="FocusRing" CornerRadius="9" BorderBrush="{DynamicResource Accent}"
+                                BorderThickness="2" Margin="1" Visibility="Collapsed" IsHitTestVisible="False"/>
+                    </Grid>
+                    <ContentPresenter Grid.Column="1" VerticalAlignment="Center" HorizontalAlignment="Left"
+                                      Margin="7,0,0,0" RecognizesAccessKey="True"/>
+                </Grid>
+                <ControlTemplate.Triggers>
+                    <Trigger Property="IsChecked" Value="True">
+                        <Setter TargetName="CheckSurface" Property="Background" Value="{DynamicResource AccentGradient}"/>
+                        <Setter TargetName="CheckSurface" Property="BorderBrush" Value="{DynamicResource Accent}"/>
+                        <Setter TargetName="CheckMark" Property="Visibility" Value="Visible"/>
+                    </Trigger>
+                    <Trigger Property="IsMouseOver" Value="True">
+                        <Setter TargetName="CheckSurface" Property="BorderBrush" Value="{DynamicResource Accent}"/>
+                    </Trigger>
+                    <Trigger Property="IsKeyboardFocused" Value="True">
+                        <Setter TargetName="FocusRing" Property="Visibility" Value="Visible"/>
+                    </Trigger>
+                    <Trigger Property="IsEnabled" Value="False">
+                        <Setter TargetName="CheckSurface" Property="Opacity" Value="0.48"/>
+                    </Trigger>
+                </ControlTemplate.Triggers>
+            </ControlTemplate></Setter.Value></Setter>
+        </Style>
     </Application.Resources>
 </Application>
